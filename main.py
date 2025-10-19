@@ -20,10 +20,12 @@ from PyQt5.QtGui import QFont, QPalette, QColor
 import pyqtgraph as pg
 from datetime import datetime
 import numpy as np
+import logging
 
 import config
 from daq_handler import DAQHandler
 from excel_writer import ExcelWriter
+from state_machine import MicrowaveStateMachine, MicrowaveState
 
 
 # ==================== MODERN UI COMPONENTS ====================
@@ -32,7 +34,7 @@ class ModernButton(QPushButton):
     """Modern styled button"""
     def __init__(self, text, icon="", color="primary", parent=None):
         super().__init__(parent)
-        self.setText(f"{icon} {text}" if icon else text)
+        self.setText(text)
         self.setObjectName(f"btn_{color}")
         self.setCursor(Qt.PointingHandCursor)
         self.setMinimumHeight(35)
@@ -74,7 +76,7 @@ class DefrostDialog(QDialog):
         layout.setSpacing(15)
         
         # Title
-        title = QLabel("❄️ Defrost Test Setup")
+        title = QLabel("Defrost Test Setup")
         title.setFont(QFont("Segoe UI", 14, QFont.Bold))
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
@@ -99,7 +101,7 @@ class DefrostDialog(QDialog):
         range_label.setStyleSheet("color: #B0B0B0;")
         input_layout.addWidget(range_label, 1, 0, 1, 2)
         
-        self.calc_button = ModernButton("Calculate Sectors", "🔢", "primary")
+        self.calc_button = ModernButton("Calculate Sectors", "", "primary")
         self.calc_button.clicked.connect(self.calculate_sectors)
         input_layout.addWidget(self.calc_button, 2, 0, 1, 2)
         
@@ -124,11 +126,11 @@ class DefrostDialog(QDialog):
         button_layout = QHBoxLayout()
         button_layout.setSpacing(10)
         
-        self.ok_button = ModernButton("Start Recording", "▶", "success")
+        self.ok_button = ModernButton("Start Recording", "", "success")
         self.ok_button.setEnabled(False)
         self.ok_button.clicked.connect(self.accept)
         
-        self.cancel_button = ModernButton("Cancel", "✖", "danger")
+        self.cancel_button = ModernButton("Cancel", "", "danger")
         self.cancel_button.clicked.connect(self.reject)
         
         button_layout.addWidget(self.ok_button)
@@ -346,6 +348,13 @@ MODE_CONFIGS = {
         "weight_range": (200, 1000, 100),
         "expected_power": 77
     }
+    ,
+    "Normal": {
+        "type": "normal",
+        "description": "Normal mode: calculates idle/silence duration.",
+        "details": "Tracks how long the system remains idle (OFF) during the test.",
+        "requires": []
+    }
 }
 
 
@@ -365,6 +374,15 @@ class MainWindow(QMainWindow):
         self.update_timer = QTimer()
         self.update_timer.timeout.connect(self.update_display)
         
+        self.state_machine = MicrowaveStateMachine(sleep_timeout=900)  # 15 min
+        
+        logging.basicConfig(
+            filename='microwave_events.log',
+            level=logging.INFO,
+            format='%(asctime)s %(levelname)s: %(message)s'
+        )
+        self.last_logged_state = None
+        
         self._setup_ui()
         self._apply_modern_theme()
         self._connect_daq()
@@ -372,13 +390,9 @@ class MainWindow(QMainWindow):
     def _setup_ui(self):
         """Setup full-featured compact UI for 15.6 inch laptop"""
         self.setWindowTitle("Microwave DAQ Testing System - Tornado")
-        self.setGeometry(50, 30, 1366, 750)  # Optimized for 15.6" (1366x768)
-        
-        # Central widget
-        central_widget = QWidget()
+        self.setGeometry(50, 50, 1400, 900)
+        central_widget = QWidget(self)
         self.setCentralWidget(central_widget)
-        
-        # Main layout
         main_layout = QVBoxLayout()
         main_layout.setSpacing(6)
         main_layout.setContentsMargins(8, 8, 8, 8)
@@ -439,11 +453,19 @@ class MainWindow(QMainWindow):
         layout = QHBoxLayout()
         layout.setContentsMargins(12, 5, 12, 5)
         
-        title = QLabel("⚡ Microwave DAQ Testing System - Tornado")
+        title = QLabel("Microwave DAQ Testing System - Tornado")
         title.setFont(QFont("Segoe UI", 11, QFont.Bold))
         layout.addWidget(title)
         
         layout.addStretch()
+        
+        # Current State Display
+        self.state_label = QLabel("State: IDLE")
+        self.state_label.setFont(QFont("Segoe UI", 9, QFont.Bold))
+        self.state_label.setStyleSheet("color: #FFD600; padding: 4px;")
+        layout.addWidget(self.state_label)
+        
+        layout.addSpacing(15)
         
         # DAQ Status
         self.daq_indicator = StatusIndicator()
@@ -466,7 +488,7 @@ class MainWindow(QMainWindow):
     
     def _create_mode_section(self):
         """Create mode selection section"""
-        group = QGroupBox("🎯 Test Mode")
+        group = QGroupBox("Test Mode")
         layout = QVBoxLayout()
         layout.setSpacing(6)
         
@@ -510,7 +532,7 @@ class MainWindow(QMainWindow):
     
     def _create_control_section(self):
         """Create control section"""
-        group = QGroupBox("🎮 Control Panel")
+        group = QGroupBox("Control Panel")
         layout = QVBoxLayout()
         layout.setSpacing(6)
         
@@ -518,16 +540,16 @@ class MainWindow(QMainWindow):
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(6)
         
-        self.start_button = ModernButton("Start", "▶", "success")
+        self.start_button = ModernButton("Start", "", "success")
         self.start_button.clicked.connect(self.start_recording)
         btn_layout.addWidget(self.start_button)
         
-        self.stop_button = ModernButton("Stop", "⏹", "danger")
+        self.stop_button = ModernButton("Stop", "", "danger")
         self.stop_button.setEnabled(False)
         self.stop_button.clicked.connect(self.stop_recording)
         btn_layout.addWidget(self.stop_button)
         
-        self.save_button = ModernButton("Save", "💾", "primary")
+        self.save_button = ModernButton("Save", "", "primary")
         self.save_button.setEnabled(False)
         self.save_button.clicked.connect(self.save_data)
         btn_layout.addWidget(self.save_button)
@@ -575,59 +597,67 @@ class MainWindow(QMainWindow):
     
     def _create_signals_section(self):
         """Create signals section"""
-        group = QGroupBox("📡 Real-time Signals")
+        group = QGroupBox("Real-time Signals")
         layout = QGridLayout()
         layout.setSpacing(6)
         layout.setContentsMargins(6, 6, 6, 6)
         
         self.signal_widgets = {}
         
+        # Icon mapping for each channel
+        channel_icons = {
+            'Microwave': '🟧',
+            'Grill': '🔥',
+            'Lamp': '💡',
+            'Door SW': '🚪',
+            'Buzzer': '🔔'
+        }
+        
         row = 0
         for channel in config.CHANNELS.keys():
             # Icon
-            icon = QLabel("⚫")
-            icon.setFont(QFont("Arial", 12))
+            icon = QLabel(channel_icons.get(channel, ""))
+            icon.setFont(QFont("Arial", 18))
             layout.addWidget(icon, row, 0)
-            
+
             # Name
             name = QLabel(channel)
             name.setFont(QFont("Segoe UI", 8, QFont.Bold))
             layout.addWidget(name, row, 1)
-            
+
             # Voltage
             voltage = QLabel("0.00V")
             voltage.setFont(QFont("Consolas", 9))
             voltage.setStyleSheet("color: #4FC3F7;")
             layout.addWidget(voltage, row, 2)
-            
+
             # Status
             status = QLabel("OFF")
             status.setFont(QFont("Segoe UI", 8))
             layout.addWidget(status, row, 3)
-            
+
             # Power for MW/Grill
             if channel in ['Microwave', 'Grill']:
                 power = QLabel("0%")
                 power.setFont(QFont("Segoe UI", 8, QFont.Bold))
                 power.setStyleSheet("color: #66BB6A;")
                 layout.addWidget(power, row, 4)
-                
+
                 progress = QProgressBar()
                 progress.setMaximum(100)
                 progress.setTextVisible(False)
                 progress.setMaximumHeight(4)
                 layout.addWidget(progress, row + 1, 0, 1, 5)
-                row += 1
-                
                 self.signal_widgets[channel] = {
                     'icon': icon, 'voltage': voltage, 'status': status,
                     'power': power, 'progress': progress
                 }
+                row += 1
             else:
                 self.signal_widgets[channel] = {
                     'icon': icon, 'voltage': voltage, 'status': status
                 }
-            
+
             row += 1
         
         group.setLayout(layout)
@@ -635,7 +665,7 @@ class MainWindow(QMainWindow):
     
     def _create_graphs_section(self):
         """Create all 5 graphs section"""
-        group = QGroupBox("📈 Live Graphs (Last 60 seconds)")
+        group = QGroupBox("Live Graphs (Last 60 seconds)")
         layout = QVBoxLayout()
         layout.setSpacing(3)
         layout.setContentsMargins(4, 4, 4, 4)
@@ -669,7 +699,7 @@ class MainWindow(QMainWindow):
     
     def _create_warnings_section(self):
         """Create warnings section"""
-        group = QGroupBox("⚠️ Warnings & Alerts")
+        group = QGroupBox("Warnings & Alerts")
         layout = QVBoxLayout()
         layout.setContentsMargins(4, 4, 4, 4)
         
@@ -684,7 +714,7 @@ class MainWindow(QMainWindow):
     
     def _create_stats_section(self):
         """Create statistics section"""
-        group = QGroupBox("📊 Statistics")
+        group = QGroupBox("Statistics")
         layout = QGridLayout()
         layout.setSpacing(4)
         layout.setContentsMargins(6, 6, 6, 6)
@@ -947,7 +977,12 @@ class MainWindow(QMainWindow):
         else:
             self.daq.expected_mw_power = None
             self.daq.expected_grill_power = None
-        
+        # Reset idle tracking for Normal mode
+        if self.current_config.get('type') == 'normal':
+            self.idle_time = 0
+            self.last_sample_time = None
+            self.last_active = True
+
         # Handle Defrost
         if self.current_config.get('type') == 'defrost':
             dialog = DefrostDialog(self)
@@ -1003,113 +1038,138 @@ class MainWindow(QMainWindow):
         # Analyze
         results = self.daq.analyze_pass_fail()
         overall = results.get('overall_result', 'N/A')
-        
-        self.result_display.setText(overall)
-        if overall == 'PASS':
-            self.result_display.setStyleSheet("color: #4CAF50; font-weight: bold;")
-        elif overall == 'FAIL':
-            self.result_display.setStyleSheet("color: #f44336; font-weight: bold;")
+        if self.current_config and self.current_config.get('type') == 'normal':
+            idle_sec = int(self.idle_time)
+            idle_min = idle_sec // 60
+            idle_rem_sec = idle_sec % 60
+            self.result_display.setText(f"Idle Time: {idle_min:02d}:{idle_rem_sec:02d}")
+            self.result_display.setStyleSheet("color: #2196F3; font-weight: bold;")
+        else:
+            self.result_display.setText(overall)
+            if overall == 'PASS':
+                self.result_display.setStyleSheet("color: #4CAF50; font-weight: bold;")
+            elif overall == 'FAIL':
+                self.result_display.setStyleSheet("color: #f44336; font-weight: bold;")
     
     def update_display(self):
         """Update display"""
         sample_data, error = self.daq.read_sample()
-        
         if error:
+            logging.error(f"DAQ Error: {error}")
             self.update_timer.stop()
             self.stop_recording()
             QMessageBox.critical(self, "DAQ Error", error)
             return
-        
         if not sample_data:
             return
-        
         voltages = sample_data['voltages']
         powers = sample_data['powers']
         warnings = sample_data['warnings']
         elapsed = sample_data['elapsed']
-        
+        # Map DAQ voltages to logical signals
+        daq_signals = {
+            'door_open': voltages.get('Door SW', 5.0) >= config.ON_THRESHOLD,
+            'start_pressed': voltages.get('Buzzer', 0) >= config.ON_THRESHOLD,  # Example: map Buzzer to Start
+            'cancel_pressed': False,  # Add mapping if available
+            'knob_turned': False,     # Add mapping if available
+            'lock_combo': False,      # Add mapping if available
+            'unlock_combo': False     # Add mapping if available
+        }
+        state = self.state_machine.update(daq_signals)
+        # Update state label
+        self.state_label.setText(f"State: {state.name}")
+        # Log state transitions
+        if state != self.last_logged_state:
+            logging.info(f"State changed to: {state.name}")
+            self.last_logged_state = state
+        # Log important DAQ events
+        if daq_signals['door_open']:
+            logging.info("Door is open")
+        if daq_signals['start_pressed']:
+            logging.info("Start button pressed")
+        # Track idle time for Normal mode
+        if self.current_config and self.current_config.get('type') == 'normal':
+            mw_on = voltages.get('Microwave', 0) >= config.ON_THRESHOLD
+            grill_on = voltages.get('Grill', 0) >= config.ON_THRESHOLD
+            active = mw_on or grill_on
+            if self.last_sample_time is not None:
+                dt = elapsed - self.last_sample_time
+                if not active:
+                    self.idle_time += dt
+            self.last_sample_time = elapsed
+            self.last_active = active
         # Update signals
         for channel, voltage in voltages.items():
             widget = self.signal_widgets[channel]
             widget['voltage'].setText(f"{voltage:.2f}V")
-            
             is_on = voltage >= config.ON_THRESHOLD
-            
             if channel == 'Door SW':
-                door_closed = voltage < config.DOOR_CLOSED_THRESHOLD
-                if door_closed:
-                    widget['icon'].setText("🟢")
-                    widget['status'].setText("CLOSED")
+                if 0 <= voltage < 0.5:
+                    widget['icon'].setText("")
+                    widget['status'].setText("ON")
                     widget['status'].setStyleSheet("color: #4CAF50;")
-                else:
-                    widget['icon'].setText("🔴")
-                    widget['status'].setText("OPEN")
+                elif 4.5 <= voltage <= 5.0:
+                    widget['icon'].setText("")
+                    widget['status'].setText("OFF")
                     widget['status'].setStyleSheet("color: #f44336;")
-            
+                else:
+                    widget['icon'].setText("")
+                    widget['status'].setText("Unknown")
+                    widget['status'].setStyleSheet("color: #757575;")
             elif channel == 'Lamp':
                 if is_on:
-                    widget['icon'].setText("💡")
+                    widget['icon'].setText("")
                     widget['status'].setText("ON")
                     widget['status'].setStyleSheet("color: #FFEB3B;")
                 else:
-                    widget['icon'].setText("⚫")
+                    widget['icon'].setText("")
                     widget['status'].setText("OFF")
                     widget['status'].setStyleSheet("color: #757575;")
-            
             elif channel == 'Buzzer':
                 if is_on:
-                    widget['icon'].setText("🔊")
+                    widget['icon'].setText("")
                     widget['status'].setText("BEEP")
                     widget['status'].setStyleSheet("color: #FF9800;")
                 else:
-                    widget['icon'].setText("⚫")
+                    widget['icon'].setText("")
                     widget['status'].setText("OFF")
                     widget['status'].setStyleSheet("color: #757575;")
-            
             else:  # MW/Grill
                 if is_on:
-                    widget['icon'].setText("🔴")
+                    widget['icon'].setText("")
                     widget['status'].setText("ON")
                     widget['status'].setStyleSheet("color: #f44336;")
                 else:
-                    widget['icon'].setText("⚫")
+                    widget['icon'].setText("")
                     widget['status'].setText("OFF")
                     widget['status'].setStyleSheet("color: #757575;")
-                
-                power = powers.get(channel, 0)
-                widget['power'].setText(f"{power:.1f}%")
-                widget['progress'].setValue(int(power))
-        
+                if 'power' in widget and 'progress' in widget:
+                    power = powers.get(channel, 0)
+                    widget['power'].setText(f"{power:.1f}%")
+                    widget['progress'].setValue(int(power))
         # Update warnings
         if warnings:
             current_time = datetime.now().strftime("%H:%M:%S")
             for warning in warnings:
                 self.warnings_text.append(f"[{current_time}] {warning}")
-        
         # Update graphs
         for channel in config.CHANNELS.keys():
             self.graph_data_x[channel].append(elapsed)
             self.graph_data_y[channel].append(voltages[channel])
-            
             while self.graph_data_x[channel] and self.graph_data_x[channel][0] < elapsed - config.GRAPH_WINDOW_SIZE:
                 self.graph_data_x[channel].pop(0)
                 self.graph_data_y[channel].pop(0)
-            
             self.graph_curves[channel].setData(self.graph_data_x[channel], self.graph_data_y[channel])
-            
             if elapsed > config.GRAPH_WINDOW_SIZE:
                 self.graph_widgets[channel].setXRange(elapsed - config.GRAPH_WINDOW_SIZE, elapsed)
             else:
                 self.graph_widgets[channel].setXRange(0, config.GRAPH_WINDOW_SIZE)
-        
         # Update stats
         stats = self.daq.get_statistics()
-        
         duration = stats['duration']
         hours = int(duration // 3600)
         minutes = int((duration % 3600) // 60)
         seconds = int(duration % 60)
-        
         self.duration_display.setText(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
         self.samples_display.setText(f"{stats['sample_count']}")
         self.stats_widgets['mw_power'].setText(f"{stats['mw_avg_power']:.1f}%")
