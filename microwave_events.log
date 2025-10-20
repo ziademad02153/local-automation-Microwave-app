@@ -1,3 +1,38 @@
-2025-10-19 16:26:11,037 INFO: State changed to: SLEEP
-2025-10-19 16:33:20,106 INFO: State changed to: RUN
-2025-10-19 16:33:20,107 INFO: Start button pressed
+2025-10-20 13:09:04,264 INFO: State changed to: IDLE
+2025-10-20 13:10:37,235 INFO: State changed to: RUN
+2025-10-20 13:10:37,236 INFO: Start button pressed
+2025-10-20 13:16:13,610 INFO: Start button pressed
+2025-10-20 13:20:23,685 INFO: Start button pressed
+2025-10-20 13:23:04,726 INFO: Start button pressed
+2025-10-20 13:40:44,691 INFO: State changed to: IDLE
+2025-10-20 13:42:57,289 INFO: State changed to: RUN
+2025-10-20 13:42:57,290 INFO: Start button pressed
+2025-10-20 13:45:14,324 INFO: Start button pressed
+2025-10-20 13:48:54,606 INFO: State changed to: IDLE
+2025-10-20 13:49:25,609 ERROR: DAQ Error: Not recording
+2025-10-20 13:51:49,556 INFO: State changed to: IDLE
+2025-10-20 13:54:00,345 INFO: State changed to: RUN
+2025-10-20 13:54:00,347 INFO: Start button pressed
+2025-10-20 13:54:00,550 INFO: Start button pressed
+2025-10-20 13:54:00,954 INFO: Start button pressed
+2025-10-20 14:43:19,709 INFO: State changed to: IDLE
+2025-10-20 14:44:53,097 INFO: State changed to: RUN
+2025-10-20 14:44:53,097 INFO: Start button pressed
+2025-10-20 14:44:53,272 INFO: Start button pressed
+2025-10-20 14:44:53,457 INFO: Start button pressed
+2025-10-20 14:44:53,707 INFO: Start button pressed
+2025-10-20 14:44:54,111 INFO: Start button pressed
+2025-10-20 14:59:33,593 INFO: State changed to: IDLE
+2025-10-20 14:59:34,125 INFO: State changed to: RUN
+2025-10-20 14:59:34,126 INFO: Start button pressed
+2025-10-20 15:03:01,280 INFO: State changed to: IDLE
+2025-10-20 15:05:33,400 INFO: State changed to: IDLE
+2025-10-20 15:07:38,640 INFO: State changed to: RUN
+2025-10-20 15:07:38,641 INFO: Start button pressed
+2025-10-20 15:07:39,458 INFO: Start button pressed
+2025-10-20 15:11:35,182 INFO: State changed to: IDLE
+2025-10-20 15:12:29,627 INFO: State changed to: RUN
+2025-10-20 15:12:29,627 INFO: Start button pressed
+2025-10-20 15:12:29,824 INFO: Start button pressed
+2025-10-20 15:12:30,045 INFO: Start button pressed
+2025-10-20 15:20:33,139 INFO: State changed to: IDLE

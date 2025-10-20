@@ -257,30 +257,34 @@ class DAQHandler:
         return None
     
     def get_statistics(self):
-        """Get recording statistics"""
+        """Get recording statistics using all data (not just last window)"""
         if self.start_time is None:
             duration = 0
         else:
             duration = (datetime.now() - self.start_time).total_seconds()
-        
-        powers = self._calculate_powers()
-        
+
+        # Use all samples for MW/Grill power
+        mw_buffer = list(self.data_buffers['Microwave'])
+        grill_buffer = list(self.data_buffers['Grill'])
+        mw_on = sum(1 for v in mw_buffer if v >= config.ON_THRESHOLD)
+        grill_on = sum(1 for v in grill_buffer if v >= config.ON_THRESHOLD)
+        mw_avg_power = (mw_on / len(mw_buffer)) * 100 if len(mw_buffer) > 0 else 0
+        grill_avg_power = (grill_on / len(grill_buffer)) * 100 if len(grill_buffer) > 0 else 0
+
         stats = {
             'duration': duration,
             'sample_count': self.sample_count,
             'door_opens': self.door_open_count,
-            'mw_avg_power': powers.get('Microwave', 0),
-            'grill_avg_power': powers.get('Grill', 0),
-            'mw_samples': powers.get('Microwave_samples', 0),
-            'grill_samples': powers.get('Grill_samples', 0)
+            'mw_avg_power': mw_avg_power,
+            'grill_avg_power': grill_avg_power,
+            'mw_samples': len(mw_buffer),
+            'grill_samples': len(grill_buffer)
         }
-        
         return stats
     
     def analyze_pass_fail(self):
         """Analyze test results for Pass/Fail - NEW"""
         stats = self.get_statistics()
-        
         results = {
             'overall_result': 'PASS',
             'mw_result': 'N/A',
@@ -291,39 +295,59 @@ class DAQHandler:
             'grill_expected': self.expected_grill_power,
             'details': []
         }
-        
-        # Check MW power
-        if self.expected_mw_power is not None and self.expected_mw_power != 'variable':
-            tolerance = config.PASS_FAIL_TOLERANCE
-            lower = self.expected_mw_power - tolerance
-            upper = self.expected_mw_power + tolerance
-            
-            if lower <= stats['mw_avg_power'] <= upper:
-                results['mw_result'] = 'PASS'
-                results['details'].append(f"✅ MW Power: {stats['mw_avg_power']:.1f}% (Expected: {self.expected_mw_power}% ±{tolerance}%)")
-            else:
-                results['mw_result'] = 'FAIL'
-                results['overall_result'] = 'FAIL'
-                results['details'].append(f"❌ MW Power: {stats['mw_avg_power']:.1f}% (Expected: {self.expected_mw_power}% ±{tolerance}%)")
-        
-        # Check Grill power
-        if self.expected_grill_power is not None:
-            tolerance = config.PASS_FAIL_TOLERANCE
-            lower = self.expected_grill_power - tolerance
-            upper = self.expected_grill_power + tolerance
-            
-            if lower <= stats['grill_avg_power'] <= upper:
-                results['grill_result'] = 'PASS'
-                results['details'].append(f"✅ Grill Power: {stats['grill_avg_power']:.1f}% (Expected: {self.expected_grill_power}% ±{tolerance}%)")
-            else:
-                results['grill_result'] = 'FAIL'
-                results['overall_result'] = 'FAIL'
-                results['details'].append(f"❌ Grill Power: {stats['grill_avg_power']:.1f}% (Expected: {self.expected_grill_power}% ±{tolerance}%)")
-        
+        # Sector-based Defrost analysis
+        if self.defrost_mode and self.defrost_sectors:
+            sector_results = []
+            mw_buffer = list(self.data_buffers['Microwave'])
+            sample_times = [(self.timestamps[i] - self.start_time).total_seconds() for i in range(len(self.timestamps))]
+            for sector in self.defrost_sectors:
+                # Get samples in sector time window
+                sector_indices = [i for i, t in enumerate(sample_times) if sector['start_time'] <= t < sector['end_time']]
+                if sector_indices:
+                    sector_samples = [mw_buffer[i] for i in sector_indices]
+                    on_count = sum(1 for v in sector_samples if v >= config.ON_THRESHOLD)
+                    measured_power = (on_count / len(sector_samples)) * 100 if sector_samples else 0
+                else:
+                    measured_power = 0
+                tolerance = config.PASS_FAIL_TOLERANCE
+                lower = sector['expected_power'] - tolerance
+                upper = sector['expected_power'] + tolerance
+                if lower <= measured_power <= upper:
+                    result = 'PASS'
+                    results['details'].append(f"✅ {sector['name']}: {measured_power:.1f}% (Expected: {sector['expected_power']}% ±{tolerance}%)")
+                else:
+                    result = 'FAIL'
+                    results['overall_result'] = 'FAIL'
+                    results['details'].append(f"❌ {sector['name']}: {measured_power:.1f}% (Expected: {sector['expected_power']}% ±{tolerance}%)")
+                sector_results.append({'name': sector['name'], 'measured': measured_power, 'expected': sector['expected_power'], 'result': result})
+            results['defrost_sector_results'] = sector_results
+        else:
+            # Normal MW/Grill analysis
+            if self.expected_mw_power is not None and self.expected_mw_power != 'variable':
+                tolerance = config.PASS_FAIL_TOLERANCE
+                lower = self.expected_mw_power - tolerance
+                upper = self.expected_mw_power + tolerance
+                if lower <= stats['mw_avg_power'] <= upper:
+                    results['mw_result'] = 'PASS'
+                    results['details'].append(f"✅ MW Power: {stats['mw_avg_power']:.1f}% (Expected: {self.expected_mw_power}% ±{tolerance}%)")
+                else:
+                    results['mw_result'] = 'FAIL'
+                    results['overall_result'] = 'FAIL'
+                    results['details'].append(f"❌ MW Power: {stats['mw_avg_power']:.1f}% (Expected: {self.expected_mw_power}% ±{tolerance}%)")
+            if self.expected_grill_power is not None:
+                tolerance = config.PASS_FAIL_TOLERANCE
+                lower = self.expected_grill_power - tolerance
+                upper = self.expected_grill_power + tolerance
+                if lower <= stats['grill_avg_power'] <= upper:
+                    results['grill_result'] = 'PASS'
+                    results['details'].append(f"✅ Grill Power: {stats['grill_avg_power']:.1f}% (Expected: {self.expected_grill_power}% ±{tolerance}%)")
+                else:
+                    results['grill_result'] = 'FAIL'
+                    results['overall_result'] = 'FAIL'
+                    results['details'].append(f"❌ Grill Power: {stats['grill_avg_power']:.1f}% (Expected: {self.expected_grill_power}% ±{tolerance}%)")
         # Check door opens
         if stats['door_opens'] > 0:
             results['details'].append(f"⚠️ Door was opened {stats['door_opens']} time(s) during test")
-        
         return results
     
     def get_all_data(self):

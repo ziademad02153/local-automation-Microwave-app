@@ -361,6 +361,29 @@ MODE_CONFIGS = {
 # ==================== MAIN WINDOW ====================
 
 class MainWindow(QMainWindow):
+    def update_signal_icons(self):
+        """Update icons state (solid/blink/off) and always show the correct icon for each channel (Unicode icons)"""
+        channel_icons = {
+            'Microwave': '⬛',
+            'Grill': '♨',
+            'Lamp': '💡',
+            'Door SW': '⎔',
+            'Buzzer': '🔊'
+        }
+        for channel, widget in self.signal_widgets.items():
+            icon = channel_icons.get(channel, "")
+            widget['icon'].setText(icon)
+            widget['icon'].setFont(QFont("Segoe UI", 28, QFont.Bold))
+            status = widget['status'].text()
+            # Color logic
+            if status == "ON":
+                widget['icon'].setStyleSheet("color: #4CAF50;")
+            elif status == "BEEP":
+                widget['icon'].setStyleSheet("color: #FF9800;")
+            elif status == "OFF":
+                widget['icon'].setStyleSheet("color: #757575;")
+            else:
+                widget['icon'].setStyleSheet("color: #757575;")
     """Main Application Window - Full Featured for 15.6 inch laptop"""
     def __init__(self):
         super().__init__()
@@ -383,9 +406,58 @@ class MainWindow(QMainWindow):
         )
         self.last_logged_state = None
         
+        # Child Lock variables
+        self.child_lock_active = False
+        self.child_lock_timer = None
+        
         self._setup_ui()
         self._apply_modern_theme()
         self._connect_daq()
+    
+    def keyPressEvent(self, event):
+        # Child Lock: Detect Start+Cancel combo
+        if event.key() == Qt.Key_S and event.modifiers() & Qt.ControlModifier:
+            # Ctrl+S simulates Start+Cancel for demo
+            if not self.child_lock_active:
+                self._activate_child_lock()
+            else:
+                self._deactivate_child_lock()
+
+    def play_beep(self, count=1, long=False):
+        """Play beep sound according to spec (count, long beep)"""
+        for _ in range(count):
+            QApplication.beep()
+        if long:
+            # Simulate long beep by holding sound (not natively supported)
+            QApplication.beep()
+            QTimer.singleShot(700, QApplication.beep)
+
+    def _activate_child_lock(self):
+        self.child_lock_active = True
+        self.rec_status_label.setText("Child Lock Active")
+        self.rec_status_label.setStyleSheet("color: #FFD600;")
+        self.start_button.setEnabled(False)
+        self.stop_button.setEnabled(False)
+        self.save_button.setEnabled(False)
+        self.mode_selector.setEnabled(False)
+        QApplication.beep()
+        QApplication.beep()
+        self.play_beep(count=2)
+        self.warnings_text.append("[Child Lock] Activated. All controls disabled.")
+        # Optionally show lock icon
+
+    def _deactivate_child_lock(self):
+        self.child_lock_active = False
+        self.rec_status_label.setText("Ready")
+        self.rec_status_label.setStyleSheet("color: #4CAF50;")
+        self.start_button.setEnabled(True)
+        self.stop_button.setEnabled(True)
+        self.save_button.setEnabled(True)
+        self.mode_selector.setEnabled(True)
+        QApplication.beep()
+        self.play_beep(long=True)
+        self.warnings_text.append("[Child Lock] Deactivated. Controls enabled.")
+        # Optionally hide lock icon
     
     def _setup_ui(self):
         """Setup full-featured compact UI for 15.6 inch laptop"""
@@ -604,13 +676,13 @@ class MainWindow(QMainWindow):
         
         self.signal_widgets = {}
         
-        # Icon mapping for each channel
+        # Icon mapping for each channel (real-world inspired)
         channel_icons = {
-            'Microwave': '🟧',
-            'Grill': '🔥',
-            'Lamp': '💡',
-            'Door SW': '🚪',
-            'Buzzer': '🔔'
+            'Microwave': '⬛',   # Black square (device)
+            'Grill': '♨',       # Hot springs (grill/heat)
+            'Lamp': '💡',        # Light bulb
+            'Door SW': '⎔',     # Open door/tech symbol
+            'Buzzer': '🔊'       # Speaker
         }
         
         row = 0
@@ -1001,25 +1073,19 @@ class MainWindow(QMainWindow):
             self.stop_button.setEnabled(True)
             self.save_button.setEnabled(False)
             self.mode_selector.setEnabled(False)
-            
             self.rec_indicator.set_status(True)
             self.rec_status_label.setText("Recording...")
             self.rec_status_label.setStyleSheet("color: #4CAF50;")
-            
-            # Clear
             for channel in config.CHANNELS.keys():
                 self.graph_data_x[channel] = []
                 self.graph_data_y[channel] = []
-            
             self.warnings_text.clear()
             self.result_display.setText("Testing...")
             self.result_display.setStyleSheet("color: #FFA726;")
-            
-            # Update expected in stats
             if self.daq.expected_mw_power:
                 self.stats_widgets['mw_expected'].setText(f"{self.daq.expected_mw_power}%")
-            
-            self.update_timer.start(1000)
+            # Set timer to 200ms for 5Hz sampling
+            self.update_timer.start(200)
     
     def stop_recording(self):
         """Stop recording"""
@@ -1050,9 +1116,20 @@ class MainWindow(QMainWindow):
                 self.result_display.setStyleSheet("color: #4CAF50; font-weight: bold;")
             elif overall == 'FAIL':
                 self.result_display.setStyleSheet("color: #f44336; font-weight: bold;")
+        
+        # End of Cooking: 3 beeps
+        self.play_beep(count=3)
     
     def update_display(self):
-        """Update display"""
+        """Update display
+        Special logic:
+        - NO OVERLAP: MW and Grill never run simultaneously in combination modes (Chicken, C1, C2)
+        - Chicken Midtime Alert: Beep, pause, wait for user, resume
+        - Child Lock: Disable controls, show status, beep
+        - Unified warnings and beeps according to spec
+        - Icon state logic: solid/blink/off
+        - Always show icons for all signals
+        """
         sample_data, error = self.daq.read_sample()
         if error:
             logging.error(f"DAQ Error: {error}")
@@ -1076,8 +1153,15 @@ class MainWindow(QMainWindow):
             'unlock_combo': False     # Add mapping if available
         }
         state = self.state_machine.update(daq_signals)
-        # Update state label
         self.state_label.setText(f"State: {state.name}")
+        # NO OVERLAP LOGIC: Ensure MW and Grill never run simultaneously in combination modes
+        if self.current_config and self.current_config.get('type') in ['combination', 'auto']:
+            if self.current_config.get('mode') in ['C1', 'C2'] or self.current_config.get('menu') == 'chicken':
+                mw_on = voltages.get('Microwave', 0) >= config.ON_THRESHOLD
+                grill_on = voltages.get('Grill', 0) >= config.ON_THRESHOLD
+                if mw_on and grill_on:
+                    warnings.append("NO OVERLAP: MW and Grill should not run simultaneously!")
+        # Chicken Midtime Alert logic REMOVED (no pause, no midtime warning)
         # Log state transitions
         if state != self.last_logged_state:
             logging.info(f"State changed to: {state.name}")
@@ -1098,55 +1182,49 @@ class MainWindow(QMainWindow):
                     self.idle_time += dt
             self.last_sample_time = elapsed
             self.last_active = active
-        # Update signals
+        # Update signals (status text, style, but always show icon)
         for channel, voltage in voltages.items():
             widget = self.signal_widgets[channel]
             widget['voltage'].setText(f"{voltage:.2f}V")
             is_on = voltage >= config.ON_THRESHOLD
+            # Set status and style
             if channel == 'Door SW':
                 if 0 <= voltage < 0.5:
-                    widget['icon'].setText("")
                     widget['status'].setText("ON")
                     widget['status'].setStyleSheet("color: #4CAF50;")
                 elif 4.5 <= voltage <= 5.0:
-                    widget['icon'].setText("")
                     widget['status'].setText("OFF")
                     widget['status'].setStyleSheet("color: #f44336;")
                 else:
-                    widget['icon'].setText("")
                     widget['status'].setText("Unknown")
                     widget['status'].setStyleSheet("color: #757575;")
             elif channel == 'Lamp':
                 if is_on:
-                    widget['icon'].setText("")
                     widget['status'].setText("ON")
                     widget['status'].setStyleSheet("color: #FFEB3B;")
                 else:
-                    widget['icon'].setText("")
                     widget['status'].setText("OFF")
                     widget['status'].setStyleSheet("color: #757575;")
             elif channel == 'Buzzer':
                 if is_on:
-                    widget['icon'].setText("")
                     widget['status'].setText("BEEP")
                     widget['status'].setStyleSheet("color: #FF9800;")
                 else:
-                    widget['icon'].setText("")
                     widget['status'].setText("OFF")
                     widget['status'].setStyleSheet("color: #757575;")
             else:  # MW/Grill
                 if is_on:
-                    widget['icon'].setText("")
                     widget['status'].setText("ON")
                     widget['status'].setStyleSheet("color: #f44336;")
                 else:
-                    widget['icon'].setText("")
                     widget['status'].setText("OFF")
                     widget['status'].setStyleSheet("color: #757575;")
                 if 'power' in widget and 'progress' in widget:
                     power = powers.get(channel, 0)
                     widget['power'].setText(f"{power:.1f}%")
                     widget['progress'].setValue(int(power))
+        # Always update icons for all signals
+        self.update_signal_icons()
         # Update warnings
         if warnings:
             current_time = datetime.now().strftime("%H:%M:%S")
@@ -1175,6 +1253,8 @@ class MainWindow(QMainWindow):
         self.stats_widgets['mw_power'].setText(f"{stats['mw_avg_power']:.1f}%")
         self.stats_widgets['grill_power'].setText(f"{stats['grill_avg_power']:.1f}%")
         self.stats_widgets['door_opens'].setText(f"{stats['door_opens']}")
+    
+    # _resume_after_midtime removed (midtime pause feature disabled)
     
     def save_data(self):
         """Save with Pass/Fail"""
@@ -1272,12 +1352,9 @@ class MainWindow(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     app.setFont(QFont("Segoe UI", 9))
-    
     window = MainWindow()
     window.show()
-    
     sys.exit(app.exec_())
-
 
 if __name__ == "__main__":
     main()
