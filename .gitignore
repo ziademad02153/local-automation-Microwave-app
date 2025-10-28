@@ -1,5 +1,5 @@
-# استثناء ملفات البيئة وملفات البايت كود من git
 __pycache__/
 *.pyc
 .venv/
 .env/
+microwave_events.log
