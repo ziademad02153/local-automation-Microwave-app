@@ -1294,7 +1294,8 @@ class MainWindow(QMainWindow):
                 'samples': stats['sample_count']
             }
             
-            if self.daq.defrost_mode:
+            # Only add defrost_sectors if current mode is Defrost
+            if self.current_config and self.current_config.get('type') == 'defrost':
                 test_info['defrost_sectors'] = self.daq.defrost_sectors
             
             pass_fail_results = self.daq.analyze_pass_fail()
