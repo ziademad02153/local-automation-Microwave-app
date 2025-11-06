@@ -1,4 +1,4 @@
-# Microwave DAQ Testing System
+# Microwave Automation Testing System
 
 Author: ziad emad allam
 
